@@ -68,15 +68,17 @@ func (n *Node) startElection() {
 
 	votes := 1
 	votesCh := make(chan bool, len(n.peers))
-	args := RequestVoteArgs{Term: term, candidateID: n.id}
+	args := RequestVoteArgs{Term: term, CandidateID: n.id}
 
 	for _, peer := range n.peers {
 		go func(addr string) {
 			var reply RequestVoteReply
-			if !n.callRPC(addr, "RPCService.RequestVote", args, &reply) {
+			ok := n.callRPC(addr, "RPCService.RequestVote", args, &reply)
+			if !ok {
 				votesCh <- false
 				return
 			}
+
 			n.mu.Lock()
 			if reply.Term > n.currentTerm {
 				n.currentTerm = reply.Term
@@ -116,7 +118,8 @@ func (n *Node) sendHeartbeats() {
 	for _, peer := range n.peers {
 		go func(addr string) {
 			var reply AppendEntriesReply
-			if !n.callRPC(addr, "RPCService.AppendEntries", args, &reply) {
+			ok := n.callRPC(addr, "RPCService.AppendEntries", args, &reply)
+			if !ok {
 				return
 			}
 			n.mu.Lock()
@@ -160,12 +163,12 @@ func (s *RPCService) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) 
 		n.votedFor = ""
 	}
 
-	if n.votedFor == "" || n.votedFor == args.candidateID {
-		n.votedFor = args.candidateID
+	if n.votedFor == "" || n.votedFor == args.CandidateID {
+		n.votedFor = args.CandidateID
 
 		reply.VoteGranted = true
 		n.resetElectionTimer()
-		log.Printf("[%s] vote for %s (term %d)", n.id, args.candidateID, args.Term)
+		log.Printf("[%s] vote for %s (term %d)", n.id, args.CandidateID, args.Term)
 	} else {
 		reply.VoteGranted = false
 	}

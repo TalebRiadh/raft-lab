@@ -16,7 +16,7 @@ func (n *Node) Serve(addr string) {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle(rpc.DefaultDebugPath, server)
+	mux.Handle(rpc.DefaultRPCPath, server)
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {

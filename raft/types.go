@@ -48,7 +48,7 @@ type Node struct {
 
 type RequestVoteArgs struct {
 	Term        int
-	candidateID string
+	CandidateID string
 }
 
 type RequestVoteReply struct {
