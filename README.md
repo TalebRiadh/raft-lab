@@ -1,18 +1,23 @@
 # raft-lab
 
-A minimal [Raft](https://raft.github.io/) consensus implementation written in Go. This is a learning-oriented lab project demonstrating the core Raft mechanics: leader election, term management, and heartbeat-based log-less replication.
+A minimal [Raft](https://raft.github.io/) consensus implementation written in Go. This is a learning-oriented lab project demonstrating the core Raft mechanics: leader election, log replication, commit advancement, and a replicated key-value store built on top of the replicated log.
 
 ## Status
 
-Currently implements the **leader election** portion of Raft only:
+Implemented:
 
 - Follower / Candidate / Leader state transitions
 - Randomized election timeouts (150–300 ms)
-- Term management and vote granting rules
+- Term management and vote granting rules (including log up-to-date checks)
 - Heartbeat (`AppendEntries`) to prevent elections and detect higher terms
 - Step-down to Follower when a higher term is observed
+- **Log replication**: leader appends client commands to its log and replicates them to followers
+- Log matching property enforcement, conflict truncation, and `nextIndex` backoff
+- Commit index advancement via majority (`matchIndex`) and per-term commit rules
+- Application of committed entries to an in-memory KV store (`SET` / `DEL`)
+- HTTP API for submitting commands, reading values, and inspecting node status
 
-Not yet implemented: log replication, log compaction/snapshots, membership changes, persistence.
+Not yet implemented: log compaction/snapshots, membership changes, persistence.
 
 ## Project structure
 
@@ -21,9 +26,9 @@ raft-lab/
 ├── cmd/node/          # Executable entry point
 │   └── main.go        # Flag parsing and node bootstrap
 ├── raft/              # Raft library package
-│   ├── node.go        # Election logic, heartbeats, RPC handlers
-│   ├── server.go      # HTTP-RPC server bootstrap
-│   └── types.go       # State, Node struct, RPC message types
+│   ├── node.go        # Election, replication, commit/apply logic, RPC handlers
+│   ├── server.go      # HTTP API + RPC server bootstrap
+│   └── types.go       # State, Node struct, RPC message types, log entries
 └── go.mod
 ```
 
@@ -56,20 +61,44 @@ go run ./cmd/node -id=node3 -port=8003 -peers=localhost:8001,localhost:8002
 
 With 3 nodes running, one will log that it becomes `LEADER` shortly after startup (assuming a majority is reachable). Kill the leader to observe a re-election among the survivors.
 
+## HTTP API
+
+Each node exposes an HTTP server (on the same port) with the following endpoints:
+
+| Endpoint     | Method | Description                                                                 |
+| ------------ | ------ | --------------------------------------------------------------------------- |
+| `/command`   | POST   | Submit a command to the log. JSON body: `{"op": "SET" \| "DEL", "key": ..., "value": ...}`. Returns `{"accepted", "index", "term"}` on the leader, or `421` with `{"error": "not leader", "known_leader": ...}` otherwise. |
+| `/get?key=k` | GET    | Read a key from the local applied state. Returns `{"key", "value", "found"}`. |
+| `/status`    | GET    | Node status: `{"id", "state", "term", "log_length", "commit_index", "known_leader"}`. |
+
+```bash
+# Submit a command to the leader
+curl -X POST localhost:8001/command -d '{"op":"SET","key":"foo","value":"bar"}'
+
+# Read it back from any node once committed
+curl 'localhost:8002/get?key=foo'
+
+# Inspect a node
+curl localhost:8001/status
+```
+
 ## How it works
 
 - Each node starts as a **Follower** and waits a randomized timeout (150–300 ms).
 - On timeout, it becomes a **Candidate**, increments its term, votes for itself, and requests votes from all peers.
-- A Candidate becomes **Leader** upon receiving votes from a majority of the cluster.
+- A Candidate becomes **Leader** upon receiving votes from a majority of the cluster (votes are only granted if the candidate's log is at least as up to date).
 - The Leader sends periodic heartbeats (`AppendEntries`); any node seeing a higher term steps down to Follower.
+- Commands submitted via `/command` are appended to the leader's log and replicated to followers on each heartbeat tick.
+- Followers truncate conflicting entries and reply with the log-matching check result; on failure the leader decrements `nextIndex` and retries.
+- The leader advances its `commitIndex` when an entry is replicated to a majority in its own term, then applies committed entries to the KV state machine.
 - Nodes communicate over Go's `net/rpc` via HTTP on the configured ports.
 
 ## Communication protocol
 
-| Method               | Args                                      | Reply                                     |
-| -------------------- | ----------------------------------------- | ----------------------------------------- |
-| `RPCService.RequestVote`    | `RequestVoteArgs{Term, candidateID}`      | `RequestVoteReply{Term, VoteGranted}`     |
-| `RPCService.AppendEntries`  | `AppendEntriesArgs{Term, LeaderID}`       | `AppendEntriesReply{Term, Success}`       |
+| Method               | Args                                                                         | Reply                                    |
+| -------------------- | ---------------------------------------------------------------------------- | ---------------------------------------- |
+| `RPCService.RequestVote`    | `RequestVoteArgs{Term, CandidateID, LastLogIndex, LastLogTerm}`       | `RequestVoteReply{Term, VoteGranted}`    |
+| `RPCService.AppendEntries`  | `AppendEntriesArgs{Term, LeaderID, PrevLogIndex, PrevLogTerm, Entries, LeaderCommit}` | `AppendEntriesReply{Term, Success}` |
 
 ## License
 
