@@ -31,7 +31,7 @@ func (n *Node) Serve(addr string) {
 		index, term, isLeader := n.Start(body.Op, body.Key, body.Value)
 		w.Header().Set("Content-Type", "application/json")
 		if !isLeader {
-			_, _, _, _, _, leaderID := n.Status()
+			_, _, _, _, _, _, leaderID := n.Status()
 			w.WriteHeader(http.StatusMisdirectedRequest)
 			json.NewEncoder(w).Encode(map[string]any{
 				"error":        "not leader",
@@ -56,15 +56,16 @@ func (n *Node) Serve(addr string) {
 		})
 	})
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-		id, state, term, logLen, commitIndex, leaderID := n.Status()
+		id, state, term, logLen, commitIndex, snapshotIndex, leaderID := n.Status()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"id": id,
-			"state": state.String(),
-			"term": term,
-			"log_length": logLen,
-			"commit_index": commitIndex,
-			"known_leader": leaderID,
+			"id":             id,
+			"state":          state.String(),
+			"term":           term,
+			"log_length":     logLen,
+			"commit_index":   commitIndex,
+			"snapshot_index": snapshotIndex,
+			"known_leader":   leaderID,
 		})
 	})
 
@@ -77,9 +78,6 @@ func (n *Node) Serve(addr string) {
 
 	log.Printf("[%s] listen on %s", n.id, addr)
 	go func() {
-		err := http.Serve(listener, mux)
-		if err != nil {
-
-		}
+		_ = http.Serve(listener, mux)
 	}()
 }

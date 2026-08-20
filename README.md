@@ -15,9 +15,10 @@ Implemented:
 - Log matching property enforcement, conflict truncation, and `nextIndex` backoff
 - Commit index advancement via majority (`matchIndex`) and per-term commit rules
 - Application of committed entries to an in-memory KV store (`SET` / `DEL`)
+- Log compaction via snapshots (`InstallSnapshot`) when a follower falls behind
 - HTTP API for submitting commands, reading values, and inspecting node status
 
-Not yet implemented: log compaction/snapshots, membership changes, persistence.
+Not yet implemented: membership changes, persistence.
 
 ## Project structure
 
@@ -68,8 +69,8 @@ Each node exposes an HTTP server (on the same port) with the following endpoints
 | Endpoint     | Method | Description                                                                 |
 | ------------ | ------ | --------------------------------------------------------------------------- |
 | `/command`   | POST   | Submit a command to the log. JSON body: `{"op": "SET" \| "DEL", "key": ..., "value": ...}`. Returns `{"accepted", "index", "term"}` on the leader, or `421` with `{"error": "not leader", "known_leader": ...}` otherwise. |
-| `/get?key=k` | GET    | Read a key from the local applied state. Returns `{"key", "value", "found"}`. |
-| `/status`    | GET    | Node status: `{"id", "state", "term", "log_length", "commit_index", "known_leader"}`. |
+| `/get?key=k` | GET    | Read a key from the local applied state (may be briefly stale on followers). Returns `{"key", "value", "found"}`. |
+| `/status`    | GET    | Node status: `{"id", "state", "term", "log_length", "commit_index", "snapshot_index", "known_leader"}`. |
 
 ```bash
 # Submit a command to the leader
@@ -91,6 +92,9 @@ curl localhost:8001/status
 - Commands submitted via `/command` are appended to the leader's log and replicated to followers on each heartbeat tick.
 - Followers truncate conflicting entries and reply with the log-matching check result; on failure the leader decrements `nextIndex` and retries.
 - The leader advances its `commitIndex` when an entry is replicated to a majority in its own term, then applies committed entries to the KV state machine.
+- When the committed log grows past a small compaction threshold (5 entries here for easy observation; thousands in production), a node replaces the committed prefix with an in-memory snapshot of its KV state, tracked by `lastIncludedIndex` / `lastIncludedTerm`.
+- A follower whose `nextIndex` falls at or below the leader's snapshot point receives that snapshot via `InstallSnapshot`, then resumes normal log replication.
+- Outbound RPCs are time-bounded (100 ms), so an unresponsive peer can never stall elections or replication; replication to each peer is serialized across heartbeat ticks.
 - Nodes communicate over Go's `net/rpc` via HTTP on the configured ports.
 
 ## Communication protocol
@@ -99,6 +103,7 @@ curl localhost:8001/status
 | -------------------- | ---------------------------------------------------------------------------- | ---------------------------------------- |
 | `RPCService.RequestVote`    | `RequestVoteArgs{Term, CandidateID, LastLogIndex, LastLogTerm}`       | `RequestVoteReply{Term, VoteGranted}`    |
 | `RPCService.AppendEntries`  | `AppendEntriesArgs{Term, LeaderID, PrevLogIndex, PrevLogTerm, Entries, LeaderCommit}` | `AppendEntriesReply{Term, Success}` |
+| `RPCService.InstallSnapshot` | `InstallSnapshotArgs{Term, LeaderID, LastIncludedIndex, LastIncludedTerm, Data}` | `InstallSnapshotReply{Term}`        |
 
 ## License
 

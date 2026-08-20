@@ -40,9 +40,11 @@ type Node struct {
 	peers []string //addresses host:port of other nodes
 
 	// persistant state
-	currentTerm int
-	votedFor    string // "" if no vote is cast during this term
-	log         []LogEntry
+	currentTerm       int
+	votedFor          string // "" if no vote is cast during this term
+	log               []LogEntry
+	lastIncludedIndex int // index of the last entry summarized in the snapshot
+	lastIncludedTerm  int // term of this entry
 
 	// volatile state on all nodes
 	state       State
@@ -51,8 +53,9 @@ type Node struct {
 	leaderID    string // redirect client to the right node
 
 	// volatile state only for the leader
-	nextIndex  map[string]int
-	matchIndex map[string]int
+	nextIndex   map[string]int
+	matchIndex  map[string]int
+	replicating map[string]bool // per-peer in-flight replication guard
 
 	// machine à états applicative
 	kv map[string]string
@@ -88,4 +91,17 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
+}
+
+// InstallSnapshotArgs RPC: InstallSnapshot (catches up with a follower who has fallen too far behind)
+type InstallSnapshotArgs struct {
+	Term              int
+	LeaderID          string
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	Data              []byte // serialized state machine (JSON from the KV store)
+}
+
+type InstallSnapshotReply struct {
+	Term int
 }
